@@ -71,6 +71,14 @@ func main() {
 
 	// --- PUBLIC ROUTES ---
 	e.POST("/login", handleLogin)
+	// Tambahkan ini agar Koyeb/Health Check bisa masuk
+	e.GET("/", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"status":  "Healthy",
+			"message": "API Istana Bansu Siap Melayani!",
+			"time":    time.Now().Format(time.RFC3339),
+		})
+	})
 
 	// --- RESTRICTED ROUTES (JWT Protected) ---
 	r := e.Group("")
