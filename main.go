@@ -99,6 +99,7 @@ func main() {
 	r.POST("/products", createProduct, isAdmin)
 	r.PUT("/products/:id", updateProduct, isAdmin)
 	r.DELETE("/products/:id", deleteProduct, isAdmin)
+	r.GET("/reports", getReports, isAdmin)
 
 	// 4. Start Server
 	port := os.Getenv("PORT")
@@ -227,12 +228,36 @@ func createProduct(c echo.Context) error {
 		Stock    int     `json:"stock"`
 		ImageUrl string  `json:"image_url"`
 	}
-	c.Bind(&req)
-	_, err := db.Exec(context.Background(), "INSERT INTO products_bansu (name, price, stock, image_url) VALUES ($1, $2, $3, $4)", req.Name, req.Price, req.Stock, req.ImageUrl)
+
+	// 1. Bind data
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(400, map[string]interface{}{"message": "Format data salah", "result_code": 400})
+	}
+
+	// 2. VALIDASI: Cek satu per satu
+	if req.Name == "" {
+		return c.JSON(400, map[string]interface{}{"message": "Nama produk wajib diisi!", "result_code": 400})
+	}
+	if req.Price <= 0 {
+		return c.JSON(400, map[string]interface{}{"message": "Harga harus lebih dari 0!", "result_code": 400})
+	}
+	if req.Stock < 0 {
+		return c.JSON(400, map[string]interface{}{"message": "Stok tidak boleh minus!", "result_code": 400})
+	}
+	if req.ImageUrl == "" {
+		return c.JSON(400, map[string]interface{}{"message": "Link gambar wajib ada!", "result_code": 400})
+	}
+
+	// 3. Eksekusi jika lolos sensor
+	_, err := db.Exec(context.Background(),
+		"INSERT INTO products_bansu (name, price, stock, image_url) VALUES ($1, $2, $3, $4)",
+		req.Name, req.Price, req.Stock, req.ImageUrl)
+
 	if err != nil {
 		return c.JSON(500, map[string]interface{}{"message": err.Error(), "result_code": 500})
 	}
-	return c.JSON(201, map[string]interface{}{"message": "Produk ditambahkan", "result_code": 201})
+
+	return c.JSON(201, map[string]interface{}{"message": "Produk berhasil ditambahkan", "result_code": 201})
 }
 
 func updateProduct(c echo.Context) error {
@@ -358,4 +383,73 @@ func getTransactions(c echo.Context) error {
 	}
 
 	return c.JSON(200, map[string]interface{}{"message": "Sukses", "result_code": 200, "data": result})
+}
+
+func getReports(c echo.Context) error {
+	// Struktur untuk menampung hasil laporan
+	type ReportData struct {
+		SalesSummary struct {
+			DailySales   float64 `json:"daily_sales"`
+			WeeklySales  float64 `json:"weekly_sales"`
+			MonthlySales float64 `json:"monthly_sales"`
+		} `json:"sales_summary"`
+		TopProducts []struct {
+			Name     string `json:"name"`
+			TotalQty int    `json:"total_qty"`
+		} `json:"top_products"`
+	}
+
+	var report ReportData
+
+	// 1. Hitung Penjualan (Harian, Mingguan, Bulanan)
+	// Menggunakan tabel transactions_bansu milik Paduka
+	salesQuery := `
+		SELECT 
+			COALESCE(SUM(CASE WHEN created_at >= CURRENT_DATE THEN total_price ELSE 0 END), 0) as daily,
+			COALESCE(SUM(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '7 days' THEN total_price ELSE 0 END), 0) as weekly,
+			COALESCE(SUM(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '30 days' THEN total_price ELSE 0 END), 0) as monthly
+		FROM transactions_bansu`
+
+	err := db.QueryRow(context.Background(), salesQuery).Scan(
+		&report.SalesSummary.DailySales,
+		&report.SalesSummary.WeeklySales,
+		&report.SalesSummary.MonthlySales,
+	)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]interface{}{"message": "Gagal hitung sales: " + err.Error()})
+	}
+
+	// 2. Cari Produk Paling Laku (Top 5 dalam 30 hari terakhir)
+	// Join transaction_items_bansu dengan products_bansu
+	topProductsQuery := `
+		SELECT p.name, SUM(ti.quantity) as total_qty
+		FROM transaction_items_bansu ti
+		JOIN products_bansu p ON ti.product_id = p.id
+		JOIN transactions_bansu t ON ti.transaction_id = t.id
+		WHERE t.created_at >= CURRENT_DATE - INTERVAL '30 days'
+		GROUP BY p.name
+		ORDER BY total_qty DESC
+		LIMIT 5`
+
+	rows, err := db.Query(context.Background(), topProductsQuery)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]interface{}{"message": "Gagal hitung top produk: " + err.Error()})
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var tp struct {
+			Name     string `json:"name"`
+			TotalQty int    `json:"total_qty"`
+		}
+		if err := rows.Scan(&tp.Name, &tp.TotalQty); err == nil {
+			report.TopProducts = append(report.TopProducts, tp)
+		}
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message":     "Laporan Berhasil Disusun, Paduka!",
+		"result_code": 200,
+		"data":        report,
+	})
 }
