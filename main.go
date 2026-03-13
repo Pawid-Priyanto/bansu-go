@@ -168,7 +168,7 @@ func handleLogin(c echo.Context) error {
 		UID:  id,
 		Role: role,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 168)), // 7 Hari
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 8760)), // 7 Hari
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
